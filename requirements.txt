@@ -1,0 +1,20 @@
+# Python requirements for LLM Bash Agent Framework
+# Install with: pip install -r requirements.txt
+# Or use pipx: pipx install llm
+
+# LLM CLI tool - required for all functionality
+# https://llm.datasette.io/
+llm>=0.18
+
+# Note: LLM plugins are installed separately via:
+#   llm install <plugin-name>
+#
+# Example plugins mentioned in this framework:
+#   llm install llm-gpt-5-nano
+#   llm install llm-claude-3
+#
+# See available plugins: https://llm.datasette.io/en/stable/plugins/directory.html
+
+# System dependencies (install separately via your package manager):
+#   - jq (JSON processor)
+#   - bash 4.0+
