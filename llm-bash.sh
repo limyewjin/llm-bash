@@ -35,6 +35,30 @@ read_stdin_if_available() {
     fi
 }
 
+# Prepend stdin to prompt if no placeholder variables found
+# Usage: prepend_stdin_if_no_placeholder "prompt" "stdin_data"
+prepend_stdin_if_no_placeholder() {
+    local prompt="$1"
+    local stdin_data="$2"
+
+    # If no stdin data, return prompt as-is
+    if [[ -z "$stdin_data" ]]; then
+        echo "$prompt"
+        return 0
+    fi
+
+    # Check if prompt contains any {{...}} placeholder
+    if [[ "$prompt" =~ \{\{[^}]+\}\} ]]; then
+        # Has placeholder, return prompt as-is
+        echo "$prompt"
+    else
+        # No placeholder, prepend stdin with newline separator
+        echo "${stdin_data}
+
+${prompt}"
+    fi
+}
+
 # Execute LLM with error handling and retries
 llm_exec() {
     local prompt="$1"
@@ -445,8 +469,11 @@ prompt_chain() {
     for prompt in "$@"; do
         log_info "Chain step $step: Processing prompt"
 
+        # Prepend stdin if no placeholders found
+        local prompt_with_stdin=$(prepend_stdin_if_no_placeholder "$prompt" "$stdin_data")
+
         # Replace {{input}} and {{previous}} placeholders
-        local actual_prompt="${prompt//\{\{input\}\}/$stdin_data}"
+        local actual_prompt="${prompt_with_stdin//\{\{input\}\}/$stdin_data}"
         actual_prompt="${actual_prompt//\{\{previous\}\}/$result}"
 
         result=$(llm_exec "$actual_prompt")
@@ -484,7 +511,9 @@ prompt_chain_transform() {
 
     for item in "$@"; do
         if $is_prompt; then
-            local actual_prompt="${item//\{\{input\}\}/$stdin_data}"
+            # Prepend stdin if no placeholders found
+            local prompt_with_stdin=$(prepend_stdin_if_no_placeholder "$item" "$stdin_data")
+            local actual_prompt="${prompt_with_stdin//\{\{input\}\}/$stdin_data}"
             actual_prompt="${actual_prompt//\{\{previous\}\}/$result}"
             result=$(llm_exec "$actual_prompt")
             if [[ $? -ne 0 ]]; then
@@ -517,6 +546,9 @@ route_by_classifier() {
     local input="$1"
     local classifier_prompt="$2"
     shift 2
+
+    # Prepend stdin if no placeholders found
+    classifier_prompt=$(prepend_stdin_if_no_placeholder "$classifier_prompt" "$stdin_data")
 
     # Replace {{input}} in input and classifier_prompt
     input="${input//\{\{input\}\}/$stdin_data}"
@@ -555,6 +587,8 @@ route_by_classifier() {
         local prompt="${route_spec#*:}"
 
         if [[ "$route" == "$route_name" ]]; then
+            # Prepend stdin if no placeholders found in route prompt
+            prompt=$(prepend_stdin_if_no_placeholder "$prompt" "$stdin_data")
             # Replace both {{input}} with actual input (which may contain stdin data)
             prompt="${prompt//\{\{input\}\}/$input}"
             local selected_output=$(llm_exec "$prompt")
@@ -585,6 +619,10 @@ route_conditional() {
     local condition_func="$2"
     local true_prompt="$3"
     local false_prompt="$4"
+
+    # Prepend stdin if no placeholders found
+    true_prompt=$(prepend_stdin_if_no_placeholder "$true_prompt" "$stdin_data")
+    false_prompt=$(prepend_stdin_if_no_placeholder "$false_prompt" "$stdin_data")
 
     # Replace {{input}} in input parameter
     input="${input//\{\{input\}\}/$stdin_data}"
@@ -619,8 +657,10 @@ parallel_prompts() {
     # Launch parallel jobs
     for prompt in "$@"; do
         {
+            # Prepend stdin if no placeholders found
+            local prompt_with_stdin=$(prepend_stdin_if_no_placeholder "$prompt" "$stdin_data")
             # Replace {{input}} in each prompt
-            local actual_prompt="${prompt//\{\{input\}\}/$stdin_data}"
+            local actual_prompt="${prompt_with_stdin//\{\{input\}\}/$stdin_data}"
             llm_exec "$actual_prompt" > "$temp_dir/result_$i"
         } &
         pids+=($!)
@@ -688,7 +728,9 @@ map_reduce() {
     # Map phase - parallel
     for input in "${inputs[@]}"; do
         {
-            local actual_prompt="${mapper_prompt//\{\{input\}\}/$input}"
+            # Prepend input if no placeholders found in mapper
+            local mapper_with_input=$(prepend_stdin_if_no_placeholder "$mapper_prompt" "$input")
+            local actual_prompt="${mapper_with_input//\{\{input\}\}/$input}"
             llm_exec "$actual_prompt" > "$temp_dir/map_$i"
         } &
         pids+=($!)
@@ -720,7 +762,9 @@ Mapped result: $map_result
 "
     done
 
-    local actual_reducer="${reducer_prompt//\{\{results\}\}/$combined}"
+    # Prepend combined results if no placeholders found in reducer
+    local reducer_with_results=$(prepend_stdin_if_no_placeholder "$reducer_prompt" "$combined")
+    local actual_reducer="${reducer_with_results//\{\{results\}\}/$combined}"
     local final_result=$(llm_exec "$actual_reducer")
 
     rm -rf "$temp_dir"
@@ -746,6 +790,11 @@ orchestrator() {
     local main_task="$1"
     local decompose_prompt="$2"
     local worker_template="$3"
+
+    # Prepend stdin if no placeholders found
+    main_task=$(prepend_stdin_if_no_placeholder "$main_task" "$stdin_data")
+    decompose_prompt=$(prepend_stdin_if_no_placeholder "$decompose_prompt" "$stdin_data")
+    worker_template=$(prepend_stdin_if_no_placeholder "$worker_template" "$stdin_data")
 
     # Replace {{input}} in main_task and prompts
     main_task="${main_task//\{\{input\}\}/$stdin_data}"
@@ -883,6 +932,12 @@ orchestrator_dynamic() {
     local execute_prompt="$3"
     local evaluate_prompt="$4"
 
+    # Prepend stdin if no placeholders found
+    task=$(prepend_stdin_if_no_placeholder "$task" "$stdin_data")
+    plan_prompt=$(prepend_stdin_if_no_placeholder "$plan_prompt" "$stdin_data")
+    execute_prompt=$(prepend_stdin_if_no_placeholder "$execute_prompt" "$stdin_data")
+    evaluate_prompt=$(prepend_stdin_if_no_placeholder "$evaluate_prompt" "$stdin_data")
+
     # Replace {{input}} in task and prompts
     task="${task//\{\{input\}\}/$stdin_data}"
     plan_prompt="${plan_prompt//\{\{input\}\}/$stdin_data}"
@@ -963,6 +1018,11 @@ evaluate_optimize() {
     local optimizer_prompt="$3"
     local max_iterations="${4:-3}"
     local quality_threshold="${5:-8}"  # Default quality score threshold: 8/10
+
+    # Prepend stdin if no placeholders found
+    initial_prompt=$(prepend_stdin_if_no_placeholder "$initial_prompt" "$stdin_data")
+    evaluator_prompt=$(prepend_stdin_if_no_placeholder "$evaluator_prompt" "$stdin_data")
+    optimizer_prompt=$(prepend_stdin_if_no_placeholder "$optimizer_prompt" "$stdin_data")
 
     # Replace {{input}} in prompts
     initial_prompt="${initial_prompt//\{\{input\}\}/$stdin_data}"
@@ -1082,6 +1142,10 @@ ab_test() {
     local evaluator="$4"
     local output_mode="${5:-clean}"  # Default to clean output
 
+    # Prepend stdin if no placeholders found
+    prompt_a=$(prepend_stdin_if_no_placeholder "$prompt_a" "$stdin_data")
+    prompt_b=$(prepend_stdin_if_no_placeholder "$prompt_b" "$stdin_data")
+
     # Replace {{input}} in input parameter
     input="${input//\{\{input\}\}/$stdin_data}"
 
@@ -1167,6 +1231,12 @@ agent_loop() {
     local observe_prompt="$4"
     local max_steps="${5:-10}"
 
+    # Prepend stdin if no placeholders found
+    goal=$(prepend_stdin_if_no_placeholder "$goal" "$stdin_data")
+    think_prompt=$(prepend_stdin_if_no_placeholder "$think_prompt" "$stdin_data")
+    act_prompt=$(prepend_stdin_if_no_placeholder "$act_prompt" "$stdin_data")
+    observe_prompt=$(prepend_stdin_if_no_placeholder "$observe_prompt" "$stdin_data")
+
     # Replace {{input}} in goal and prompts
     goal="${goal//\{\{input\}\}/$stdin_data}"
     think_prompt="${think_prompt//\{\{input\}\}/$stdin_data}"
@@ -1217,6 +1287,10 @@ react_agent() {
     local task="$1"
     local tools="$2"
     local max_steps="${3:-10}"
+
+    # Prepend stdin if no placeholders found
+    task=$(prepend_stdin_if_no_placeholder "$task" "$stdin_data")
+    tools=$(prepend_stdin_if_no_placeholder "$tools" "$stdin_data")
 
     # Replace {{input}} in task and tools
     task="${task//\{\{input\}\}/$stdin_data}"
@@ -1318,6 +1392,9 @@ self_consistency() {
     local prompt="$1"
     local num_samples="${2:-5}"
 
+    # Prepend stdin if no placeholders found
+    prompt=$(prepend_stdin_if_no_placeholder "$prompt" "$stdin_data")
+
     # Replace {{input}} in prompt
     prompt="${prompt//\{\{input\}\}/$stdin_data}"
 
@@ -1390,6 +1467,12 @@ tree_of_thoughts() {
     local depth="${5:-3}"
     local branches="${6:-3}"
 
+    # Prepend stdin if no placeholders found
+    problem=$(prepend_stdin_if_no_placeholder "$problem" "$stdin_data")
+    generate=$(prepend_stdin_if_no_placeholder "$generate" "$stdin_data")
+    evaluate=$(prepend_stdin_if_no_placeholder "$evaluate" "$stdin_data")
+    select=$(prepend_stdin_if_no_placeholder "$select" "$stdin_data")
+
     # Replace {{input}} in all prompts
     problem="${problem//\{\{input\}\}/$stdin_data}"
     generate="${generate//\{\{input\}\}/$stdin_data}"
@@ -1456,7 +1539,7 @@ load_state() {
 }
 
 # Export functions for use in other scripts
-export -f read_stdin_if_available llm_exec parse_json log_info log_error
+export -f read_stdin_if_available prepend_stdin_if_no_placeholder llm_exec parse_json log_info log_error
 export -f format_result format_result_text format_result_json
 export -f llm_exec_schema llm_exec_schema_multi extract_json_field extract_json_array validate_schema_response
 export -f prompt_chain prompt_chain_transform
